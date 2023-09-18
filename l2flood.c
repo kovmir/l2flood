@@ -53,6 +53,7 @@ static int size    = 44;
 static int ident   = 200;
 #ifdef _OPENMP
 static int delay   = 0;
+static int threads = 30;
 #else
 static int delay   = 1;
 #endif
@@ -273,7 +274,7 @@ static void usage(void)
 #endif
 	printf("Usage:\n");
 #ifdef _OPENMP
-	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
+	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0); default\n");
 #else
 	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
@@ -290,7 +291,11 @@ int main(int argc, char *argv[])
 	/* Default options */
 	bacpy(&bdaddr, BDADDR_ANY);
 
+#ifdef _OPENMP
+	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
+#else
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:frv")) != EOF) {
+#endif
 		switch(opt) {
 		case 'i':
 			if (!strncasecmp(optarg, "hci", 3))
@@ -329,6 +334,12 @@ int main(int argc, char *argv[])
 			size = atoi(optarg);
 			break;
 
+#ifdef _OPENMP
+		case 'n':
+			threads = atoi(optarg);
+			break;
+#endif
+
 		default:
 			usage();
 			exit(1);
@@ -341,7 +352,7 @@ int main(int argc, char *argv[])
 	}
 
 #ifdef _OPENMP
-	#pragma omp parallel
+	#pragma omp parallel num_threads(threads)
 #endif
 	{
 		ping(argv[optind]);
