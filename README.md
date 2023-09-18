@@ -10,7 +10,7 @@ disconnect.
 ```bash
 git clone https://github.com/kovmir/l2flood
 cd l2flood
-make
+make # Use `make serial` to build upstream l2ping.
 sudo make install
 ```
 
@@ -18,7 +18,7 @@ sudo make install
 
 ```bash
 l2flood 94:3a:2c:e1:2b:07 # Flood a given device using 30 threads.
-l2flood -n 50 94:3a:2c:e1:2b:07 # Flood a given device using 50 threads.
+l2flood -n 50 94:3a:2c:e1:2b:07 # Flood using 50 threads.
 ```
 
 * The default delay between packets has been changed to `0`.
