@@ -51,7 +51,11 @@
 static bdaddr_t bdaddr;
 static int size    = 44;
 static int ident   = 200;
+#ifdef _OPENMP
+static int delay   = 0;
+#else
 static int delay   = 1;
+#endif
 static int count   = -1;
 static int timeout = 10;
 static int reverse = 0;
@@ -270,10 +274,11 @@ static void usage(void)
 	printf("Usage:\n");
 #ifdef _OPENMP
 	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
+	printf("\t-f  Flood ping (delay = 0); default\n");
 #else
 	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
-#endif
 	printf("\t-f  Flood ping (delay = 0)\n");
+#endif
 	printf("\t-r  Reverse ping\n");
 	printf("\t-v  Verify request and response payload\n");
 }
