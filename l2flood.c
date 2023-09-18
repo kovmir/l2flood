@@ -49,12 +49,13 @@
 
 /* Defaults */
 static bdaddr_t bdaddr;
-static int size    = 44;
 static int ident   = 200;
 #ifdef _OPENMP
+static int size    = 600;
 static int delay   = 0;
 static int threads = 30;
 #else
+static int size    = 44;
 static int delay   = 1;
 #endif
 static int count   = -1;
