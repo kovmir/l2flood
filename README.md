@@ -22,7 +22,7 @@ l2flood -n 50 94:3a:2c:e1:2b:07 # Flood using 50 threads.
 ```
 
 * The default delay between packets has been changed to `0`.
-* The default data packet size has been increase to `600`.
+* The default data packet size has been increased to `600`.
 * `l2ping` options work.
 
 [1]: https://linux.die.net/man/1/l2ping
