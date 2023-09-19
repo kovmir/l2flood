@@ -53,7 +53,7 @@ static int ident   = 200;
 #ifdef _OPENMP
 static int size    = 600;
 static int delay   = 0;
-static int threads = 30;
+static int threads;
 #else
 static int size    = 44;
 static int delay   = 1;
@@ -291,8 +291,8 @@ int main(int argc, char *argv[])
 
 	/* Default options */
 	bacpy(&bdaddr, BDADDR_ANY);
-
 #ifdef _OPENMP
+	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
 #else
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:frv")) != EOF) {
