@@ -61,15 +61,15 @@ A: Yes.
 
 A: Get a second bluetooth card, and flood using both of them.
 
-**Q: How to fix `Can't create socket: Operation not permitted`?**
-
-A: Re-run as `root` user.
-
 ```bash
 BT_ADDR='00:00:00:00:00:00' # Set the target address.
 l2flood -i hci0 $BT_ADDR
 l2flood -i hci1 $BT_ADDR
 ```
+
+**Q: How to fix `Can't create socket: Operation not permitted`?**
+
+A: Re-run as `root` user.
 
 [1]: https://linux.die.net/man/1/l2ping
 [2]: https://github.com/termux/termux-app
