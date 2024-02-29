@@ -43,7 +43,7 @@ Keep in mind:
 
 * [Bluez][3]
 
-# SUPPORTED OS
+# SUPPORTED OPERATING SYSTEMS
 
 * Linux
 
