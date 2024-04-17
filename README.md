@@ -22,8 +22,8 @@ Suppose there is a loud bluetooth speaker in public, and suppose
 `94:3a:2c:e1:2b:07` is its address. You can shut it off like that:
 
 ```bash
-l2flood 94:3a:2c:e1:2b:07 # Flood a given device using all CPU threads.
-l2flood -n 50 94:3a:2c:e1:2b:07 # Flood using 50 CPU threads.
+l2flood 94:3a:2c:e1:2b:07 # Flood with as much threads as the are CPU cores.
+l2flood -n 50 94:3a:2c:e1:2b:07 # Flood with 50 threads.
 ```
 
 A weak speaker CPU will not be able to process that many ping requests, and
