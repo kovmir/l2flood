@@ -22,7 +22,7 @@ Suppose there is a loud bluetooth speaker in public, and suppose
 `94:3a:2c:e1:2b:07` is its address. You can shut it off like that:
 
 ```bash
-l2flood 94:3a:2c:e1:2b:07 # Flood with as much threads as the are CPU cores.
+l2flood 94:3a:2c:e1:2b:07 # Flood with as much threads as there are CPU cores.
 l2flood -n 50 94:3a:2c:e1:2b:07 # Flood with 50 threads.
 ```
 
