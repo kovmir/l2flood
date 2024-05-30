@@ -42,6 +42,7 @@ Keep in mind:
 # DEPENDENCIES
 
 * [Bluez][3]
+  * On Debian/Ubuntu/Kali `sudo apt install -y libbluetooth-dev`.
 
 # SUPPORTED OPERATING SYSTEMS
 
