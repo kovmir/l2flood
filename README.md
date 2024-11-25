@@ -64,7 +64,7 @@ A: Get a second bluetooth card, and flood using both of them.
 
 ```bash
 BT_ADDR='00:00:00:00:00:00' # Set the target address.
-l2flood -i hci0 $BT_ADDR
+l2flood -i hci0 $BT_ADDR &
 l2flood -i hci1 $BT_ADDR
 ```
 
