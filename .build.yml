@@ -1,0 +1,6 @@
+image: alpine/edge
+packages:
+  - build-base
+  - bluez-dev
+tasks:
+  - build: make -C l2flood
