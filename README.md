@@ -1,3 +1,7 @@
+# REPOSITORY MIGRATION NOTICE
+
+Migrated to [SourceHut](https://git.sr.ht/~kovmir/l2flood).
+
 # l2flood
 
 [![builds.sr.ht status](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml.svg)](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml?)
