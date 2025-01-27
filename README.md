@@ -12,7 +12,7 @@ disconnect.
 Satisfy the [dependencies](#dependencies) first, and then:
 
 ```bash
-git clone https://github.com/kovmir/l2flood
+git clone https://git.sr.ht/~kovmir/l2flood
 cd l2flood
 make # Use `make serial` to build upstream l2ping.
 sudo make install
