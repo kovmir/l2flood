@@ -74,6 +74,6 @@ l2flood -i hci1 $BT_ADDR
 
 A: Re-run as `root` user.
 
-[1]: https://linux.die.net/man/1/l2ping
+[1]: https://man.archlinux.org/man/l2ping.1
 [2]: https://github.com/termux/termux-app
 [3]: https://www.bluez.org/
