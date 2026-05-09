@@ -21,6 +21,7 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
+ *  Modified by Ymsniper: added -R EMP mode (OpenMP only).
  */
 
 #ifdef HAVE_CONFIG_H
@@ -62,7 +63,7 @@ static int delay   = 1;
 static int count   = -1;
 static int timeout = 10;
 static int reverse = 0;
-static int verify  = 0;
+static int verify = 0;
 
 #ifdef _OPENMP
 /* EMP mode flag */
@@ -80,7 +81,7 @@ static float tv2fl(struct timeval tv)
 
 static void stat(int sig)
 {
-	int loss = sent_pkt ? (float)((sent_pkt - recv_pkt) / (sent_pkt / 100.0)) : 0;
+	int loss = sent_pkt ? (float)((sent_pkt-recv_pkt)/(sent_pkt/100.0)) : 0;
 	printf("%d sent, %d received, %d%% loss\n", sent_pkt, recv_pkt, loss);
 	exit(0);
 }
@@ -203,7 +204,7 @@ static void ping_normal(char *svr)
 				goto error;
 			}
 
-			if (!err) {
+			if (!err){
 				printf("Disconnected\n");
 				goto error;
 			}
@@ -335,11 +336,7 @@ static void ping_emp(char *svr)
 	/* Spread packet IDs across threads so they don't all send id=200.
 	 * ident=200, range is 200-254 (55 values). Thread N starts at
 	 * ident + (N % 55) giving each thread a unique starting id. */
-	#ifdef _OPENMP
 	uint8_t id = (uint8_t)(ident + (omp_get_thread_num() % 55));
-	#else
-	uint8_t id = ident;
-	#endif
 
 	while (count == -1 || count-- > 0) {
 		l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
@@ -486,7 +483,7 @@ static void usage(void)
 	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-R] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0); default\n");
 	#else
-	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-R] [-f] [-r] [-v] <bdaddr>\n");
+	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0)\n");
 	#endif
 	printf("\t-r  Reverse ping\n");
