@@ -21,23 +21,6 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
- *  Modified by Ymsniper: added -R (EMP) mode. Normal mode (-R absent) is unchanged.
- *
- *  Normal mode fixes:
- *    - sleep(delay) moved outside !lost block; was skipped on packet loss causing
- *      rapid-fire with no inter-ping interval
- *    - sent_pkt/recv_pkt increments wrapped in omp atomic; were data races
- *    - dead free() calls after stat() removed; stat() calls exit() so they
- *      could never execute
- *    - banner wrapped in omp single nowait so only one thread prints it
- *    - printf changed from id-ident to id; id-ident was always 0 on first packet
- *
- *  EMP mode (-R):
- *    Pure send loop, no recv() or poll() for responses. On send failure the
- *    socket is closed and reopened immediately. Uses a burst-and-resync loop
- *    so all threads close and reconnect together, forcing periodic full ACL
- *    teardown instead of staggered L2CAP channel shuffling. Never exits on
- *    its own, only on SIGINT.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -81,8 +64,10 @@ static int timeout = 10;
 static int reverse = 0;
 static int verify  = 0;
 
+#ifdef _OPENMP
 /* EMP mode flag */
 static int reconnect = 0;   /* -R */
+#endif
 
 /* Stats */
 static int sent_pkt = 0;
@@ -90,7 +75,7 @@ static int recv_pkt = 0;
 
 static float tv2fl(struct timeval tv)
 {
-	return (float)(tv.tv_sec * 1000.0) + (float)(tv.tv_usec / 1000.0);
+	return (float)(tv.tv_sec*1000.0) + (float)(tv.tv_usec/1000.0);
 }
 
 static void stat(int sig)
@@ -260,10 +245,10 @@ static void ping_normal(char *svr)
 
 				/* Check payload */
 				if (memcmp(&send_buf[L2CAP_CMD_HDR_SIZE],
-						   &recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
+					&recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
 					fprintf(stderr, "Response payload different.\n");
-					goto error;
-				}
+				goto error;
+					}
 			}
 
 			#ifdef _OPENMP
@@ -297,6 +282,7 @@ static void ping_normal(char *svr)
 	exit(1);
 }
 
+#ifdef _OPENMP
 /* ------------------------------------------------------------
  *  EMP mode (reconnect == 1): fire-and-forget, synchronized burst-reconnect
  *
@@ -349,11 +335,11 @@ static void ping_emp(char *svr)
 	/* Spread packet IDs across threads so they don't all send id=200.
 	 * ident=200, range is 200-254 (55 values). Thread N starts at
 	 * ident + (N % 55) giving each thread a unique starting id. */
-#ifdef _OPENMP
+	#ifdef _OPENMP
 	uint8_t id = (uint8_t)(ident + (omp_get_thread_num() % 55));
-#else
+	#else
 	uint8_t id = ident;
-#endif
+	#endif
 
 	while (count == -1 || count-- > 0) {
 		l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
@@ -435,7 +421,7 @@ static void ping_emp(char *svr)
 				if (getsockname(sk, (struct sockaddr *)&addr, &optlen) == 0) {
 					ba2str(&addr.l2_bdaddr, str);
 					printf("Ping: %s from %s (data size %d) ...\n",
-					       svr, str, size);
+						   svr, str, size);
 				}
 				printed = 1;
 			}
@@ -454,8 +440,8 @@ static void ping_emp(char *svr)
 			if (send(sk, send_buf, L2CAP_CMD_HDR_SIZE + size, 0) <= 0)
 				break; /* link died mid-burst, fall through to close */
 
-			#pragma omp atomic
-			sent_pkt++;
+				#pragma omp atomic
+				sent_pkt++;
 
 			if (++id > 254) id = ident;
 		}
@@ -475,13 +461,16 @@ static void ping_emp(char *svr)
 	free(send_buf);
 	stat(0);
 }
+#endif /* _OPENMP */
 
 /* Wrapper */
 static void ping(char *svr)
 {
+	#ifdef _OPENMP
 	if (reconnect)
 		ping_emp(svr);
 	else
+		#endif
 		ping_normal(svr);
 }
 
@@ -514,72 +503,73 @@ int main(int argc, char *argv[])
 	#ifdef _OPENMP
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt = getopt(argc, argv, "i:d:s:c:t:n:Rfrv")) != EOF) {
-	#else
-	while ((opt = getopt(argc, argv, "i:d:s:c:t:Rfrv")) != EOF) {
-	#endif
-		switch (opt) {
-			case 'i':
-				if (!strncasecmp(optarg, "hci", 3))
-					hci_devba(atoi(optarg + 3), &bdaddr);
+		#else
+		while ((opt = getopt(argc, argv, "i:d:s:c:t:frv")) != EOF) {
+			#endif
+			switch (opt) {
+				case 'i':
+					if (!strncasecmp(optarg, "hci", 3))
+						hci_devba(atoi(optarg + 3), &bdaddr);
 				else
 					str2ba(optarg, &bdaddr);
 				break;
 
-			case 'd':
-				delay = atoi(optarg);
-				break;
+				case 'd':
+					delay = atoi(optarg);
+					break;
 
-			case 'f':
-				delay = 0;
-				break;
+				case 'f':
+					delay = 0;
+					break;
 
-			case 'r':
-				reverse = 1;
-				break;
+				case 'r':
+					reverse = 1;
+					break;
 
-			case 'v':
-				verify = 1;
-				break;
+				case 'v':
+					verify = 1;
+					break;
 
-			case 'c':
-				count = atoi(optarg);
-				break;
+				case 'c':
+					count = atoi(optarg);
+					break;
 
-			case 't':
-				timeout = atoi(optarg);
-				break;
+				case 't':
+					timeout = atoi(optarg);
+					break;
 
-			case 's':
-				size = atoi(optarg);
-				break;
+				case 's':
+					size = atoi(optarg);
+					break;
 
-			case 'R':
-				reconnect = 1;
-				break;
+					#ifdef _OPENMP
+				case 'R':
+					reconnect = 1;
+					break;
+					#endif
+					#ifdef _OPENMP
+				case 'n':
+					threads = atoi(optarg);
+					break;
+					#endif
 
-			#ifdef _OPENMP
-			case 'n':
-				threads = atoi(optarg);
-				break;
-			#endif
-
-			default:
-				usage();
-				exit(1);
+				default:
+					usage();
+					exit(1);
+			}
 		}
-	}
 
-	if (!(argc - optind)) {
-		usage();
-		exit(1);
-	}
+		if (!(argc - optind)) {
+			usage();
+			exit(1);
+		}
 
-	#ifdef _OPENMP
-	#pragma omp parallel num_threads(threads)
-	#endif
-	{
-		ping(argv[optind]);
-	}
+		#ifdef _OPENMP
+		#pragma omp parallel num_threads(threads)
+		#endif
+		{
+			ping(argv[optind]);
+		}
 
-	return 0;
-}
+		return 0;
+	}
