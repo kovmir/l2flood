@@ -278,8 +278,8 @@ int main(int argc, char *argv[])
 	bacpy(&bdaddr, BDADDR_ANY);
 
 #ifdef _OPENMP
-	int size  = 600;
-	int delay = 0;
+	size  = 600;
+	delay = 0;
 
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
