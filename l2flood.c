@@ -341,7 +341,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	#pragma omp parallel num_threads(threads)
+#pragma omp parallel num_threads(threads)
 	{
 		ping(argv[optind]);
 	}
