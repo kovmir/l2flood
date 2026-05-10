@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*
  *
  *  BlueZ - Bluetooth protocol stack for Linux
@@ -7,26 +8,13 @@
  *  Copyright (C) 2002-2010  Marcel Holtmann <marcel@holtmann.org>
  *
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
- *
  */
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
@@ -42,10 +30,10 @@
 #include <omp.h>
 #endif
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/hci_lib.h>
-#include <bluetooth/l2cap.h>
+#include "bluetooth/bluetooth.h"
+#include "bluetooth/hci.h"
+#include "bluetooth/hci_lib.h"
+#include "bluetooth/l2cap.h"
 
 /* Defaults */
 static bdaddr_t bdaddr;
@@ -57,7 +45,7 @@ static int threads;
 #else
 static int size    = 44;
 static int delay   = 1;
-#endif
+#endif /* _OPENMP */
 static int count   = -1;
 static int timeout = 10;
 static int reverse = 0;
@@ -291,6 +279,7 @@ int main(int argc, char *argv[])
 
 	/* Default options */
 	bacpy(&bdaddr, BDADDR_ANY);
+
 #ifdef _OPENMP
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
