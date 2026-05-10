@@ -28,7 +28,7 @@
 
 #ifdef _OPENMP
 #include <omp.h>
-#endif
+#endif /* _OPENMP */
 
 #include "bluetooth/bluetooth.h"
 #include "bluetooth/hci.h"
@@ -37,19 +37,16 @@
 
 /* Defaults */
 static bdaddr_t bdaddr;
-static int ident   = 200;
-#ifdef _OPENMP
-static int size    = 600;
-static int delay   = 0;
-static int threads;
-#else
 static int size    = 44;
+static int ident   = 200;
 static int delay   = 1;
-#endif /* _OPENMP */
 static int count   = -1;
 static int timeout = 10;
 static int reverse = 0;
 static int verify = 0;
+#ifdef _OPENMP
+static int threads;
+#endif /* _OPENMP */
 
 /* Stats */
 static int sent_pkt = 0;
@@ -231,7 +228,7 @@ static void ping(char *svr)
 #else
 			printf("%d bytes from %s id %d time %.2fms\n", recv_cmd->len, svr,
 				   id - ident, tv2fl(tv_diff));
-#endif
+#endif /* _OPENMP */
 
 			if (delay)
 				sleep(delay);
@@ -260,7 +257,7 @@ static void usage(void)
 	printf("l2flood - L2CAP flood\n");
 #else
 	printf("l2ping - L2CAP ping\n");
-#endif
+#endif /* _OPENMP */
 	printf("Usage:\n");
 #ifdef _OPENMP
 	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-f] [-r] [-v] <bdaddr>\n");
@@ -268,7 +265,7 @@ static void usage(void)
 #else
 	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
 	printf("\t-f  Flood ping (delay = 0)\n");
-#endif
+#endif /* _OPENMP */
 	printf("\t-r  Reverse ping\n");
 	printf("\t-v  Verify request and response payload\n");
 }
@@ -281,11 +278,14 @@ int main(int argc, char *argv[])
 	bacpy(&bdaddr, BDADDR_ANY);
 
 #ifdef _OPENMP
+	int size  = 600;
+	int delay = 0;
+
 	threads = sysconf(_SC_NPROCESSORS_ONLN);
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
 #else
 	while ((opt=getopt(argc,argv,"i:d:s:c:t:frv")) != EOF) {
-#endif
+#endif /* _OPENMP */
 		switch(opt) {
 		case 'i':
 			if (!strncasecmp(optarg, "hci", 3))
@@ -328,7 +328,7 @@ int main(int argc, char *argv[])
 		case 'n':
 			threads = atoi(optarg);
 			break;
-#endif
+#endif /* _OPENMP */
 
 		default:
 			usage();
