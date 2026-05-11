@@ -2,8 +2,6 @@
 
 [![builds.sr.ht status](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml.svg)](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml?)
 
-[l2ping][1] with threads.
-
 Flood a given bluetooth device with ping requests in order to force it to
 disconnect.
 
@@ -14,7 +12,7 @@ Satisfy the [dependencies](#dependencies) first, and then:
 ```bash
 git clone https://git.sr.ht/~kovmir/l2flood
 cd l2flood
-make # Use `make serial` to build upstream l2ping.
+make
 sudo make install
 ```
 
@@ -24,22 +22,18 @@ Suppose there is a loud bluetooth speaker in public, and suppose
 `94:3a:2c:e1:2b:07` is its address. You can shut it off like that:
 
 ```bash
-l2flood 94:3a:2c:e1:2b:07 # Flood with as much threads as there are CPU cores.
-l2flood -n 50 94:3a:2c:e1:2b:07 # Flood with 50 threads.
+l2flood 94:3a:2c:e1:2b:07 # Flood with up to 4 threads, depending on how many CPU cores are available.
+l2flood -t 5 94:3a:2c:e1:2b:07 # Flood with 5 threads.
 ```
 
-A weak speaker CPU will not be able to process that many ping requests, and
-music decoding simultaneously; so it will disconnect.
+A weak speaker CPU or Bluetooth interface will not be able to process that many
+ping requests, and receive/decode music simultaneously, so it will
+disconnect.
 
-Keep in mind:
-
-* The default delay between packets has been changed to `0`.
-* The default data packet size has been increased to `600`.
-* [`l2ping` options][1] work.
-* *Your bluetooth card is your bottleneck: Even if you have a multi-core
-  multi-gigahertz CPU, it makes little to no sense to spawn as much as 1,000
-  threads, because your bluetooth card is unlikely to be fast enough to process
-  all the requests as quick as you submit them.*
+*Your bluetooth card is your bottleneck: Even if you have a multi-core
+multi-gigahertz CPU, it makes little to no sense to spawn as much as 100
+threads, because your bluetooth card is unlikely to be fast enough to process
+all the requests as quick as you submit them.*
 
 # DEPENDENCIES
 
@@ -49,6 +43,10 @@ Keep in mind:
 # SUPPORTED OPERATING SYSTEMS
 
 * Linux
+
+# CREDITS
+
+@Ymsniper refactored the entire flood algorithm.
 
 # FAQ
 
@@ -74,6 +72,5 @@ l2flood -i hci1 $BT_ADDR
 
 A: Re-run as `root` user.
 
-[1]: https://man.archlinux.org/man/l2ping.1
 [2]: https://github.com/termux/termux-app
 [3]: https://www.bluez.org/

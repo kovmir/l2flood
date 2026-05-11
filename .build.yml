@@ -3,5 +3,4 @@ packages:
   - build-base
   - bluez-dev
 tasks:
-  - build: CFLAGS='-Werror' make -C l2flood serial parallel
-
+  - build: CFLAGS='-Werror' make -C l2flood

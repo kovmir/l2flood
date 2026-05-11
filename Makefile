@@ -6,11 +6,8 @@ project = l2flood
 
 LDFLAGS = -lbluetooth
 
-parallel:
-	$(CC) $(CFLAGS) $(project).c -fopenmp $(LDFLAGS) -o $(project)
-
-serial:
-	$(CC) $(CFLAGS) $(project).c $(LDFLAGS) -o $(project)
+build:
+	$(CC) $(CFLAGS) -fopenmp $(project).c $(LDFLAGS) -o $(project)
 
 clean:
 	rm -f ./$(project)
@@ -19,4 +16,4 @@ install:
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"
 	$(INSTALL) ./$(project) "$(DESTDIR)$(PREFIX)/bin/$(project)"
 
-.PHONY: parallel serial clean install
+.PHONY: build clean install
