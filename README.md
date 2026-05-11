@@ -46,7 +46,7 @@ all the requests as quick as you submit them.*
 
 # CREDITS
 
-@Ymsniper refactored the entire flood algorithm.
+[@Ymsniper](https://github.com/Ymsniper) refactored the entire flood algorithm.
 
 # FAQ
 
