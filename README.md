@@ -37,6 +37,10 @@ all the requests as quick as you submit them.*
 
 # DEPENDENCIES
 
+* [Git][4]
+* [GNU Make][5]
+* [pkg-config][6]
+* [GCC][7] or [Clang][8]
 * [Bluez][3]
   * On Debian/Ubuntu/Kali `sudo apt install -y libbluetooth-dev`.
 
@@ -74,3 +78,8 @@ A: Re-run as `root` user.
 
 [2]: https://github.com/termux/termux-app
 [3]: https://www.bluez.org/
+[4]: https://git-scm.com/
+[5]: https://www.gnu.org/software/make/
+[6]: https://gitlab.freedesktop.org/pkg-config/pkg-config
+[7]: https://gcc.gnu.org/
+[8]: https://clang.llvm.org/
