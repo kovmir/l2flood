@@ -4,7 +4,14 @@ PREFIX ?= /usr/local
 BLUEZ_LDLIBS := $(shell pkg-config --libs bluez)
 BLUEZ_CFLAGS := $(shell pkg-config --cflags bluez)
 
-CFLAGS += -fopenmp $(BLUEZ_CFLAGS)
+CFLAGS += -std=c99
+CFLAGS += -pedantic
+CFLAGS += -Wall
+CFLAGS += -Wextra
+CFLAGS += -fopenmp
+CFLAGS += -D_DEFAULT_SOURCE
+CFLAGS += $(BLUEZ_CFLAGS)
+
 LDLIBS += $(BLUEZ_LDLIBS)
 
 BUILD_BIN := l2flood
