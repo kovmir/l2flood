@@ -32,4 +32,4 @@ install:
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BUILD_BIN)"
 
-.PHONY: build clean install uninstall
+.PHONY: all build clean install uninstall
