@@ -49,7 +49,7 @@
 } while (0)
 
 /* Function prototypes */
-static void flood_ping(char *target_baddr);
+static void flood_ping(const char *target_baddr);
 static inline void usage(void);
 
 /* Global variables */
@@ -57,7 +57,7 @@ static bdaddr_t local_baddr; /* Local Bluetooth interface to attack from. */
 static int num_threads;      /* Number of parallel workers. */
 
 void
-flood_ping(char *target_baddr)
+flood_ping(const char *target_baddr)
 {
 	struct sockaddr_l2 addr;
 	socklen_t optlen;
