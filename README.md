@@ -1,7 +1,5 @@
 # l2flood
 
-[![builds.sr.ht status](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml.svg)](https://builds.sr.ht/~kovmir/l2flood/commits/master/.build.yml?)
-
 Flood a given bluetooth device with ping requests in order to force it to
 disconnect.
 
