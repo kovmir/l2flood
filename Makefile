@@ -3,6 +3,7 @@ PREFIX ?= /usr/local
 
 BLUEZ_LDLIBS := $(shell pkg-config --libs bluez)
 BLUEZ_CFLAGS := $(shell pkg-config --cflags bluez)
+GIT_VERSION := $(shell git describe --tags --always --dirty)
 
 CFLAGS += -std=c99
 CFLAGS += -pedantic
@@ -10,6 +11,7 @@ CFLAGS += -Wall
 CFLAGS += -Wextra
 CFLAGS += -fopenmp
 CFLAGS += -D_DEFAULT_SOURCE
+CFLAGS += -DGIT_VERSION=\"$(GIT_VERSION)\"
 CFLAGS += $(BLUEZ_CFLAGS)
 
 LDLIBS += $(BLUEZ_LDLIBS)

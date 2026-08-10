@@ -32,6 +32,10 @@
 #warning "Unsupported operating system."
 #endif /* __linux__ */
 
+#define SUPPORT_URL "https://github.com/kovmir/l2flood/issues"
+#ifndef GIT_VERSION
+#define GIT_VERSION "dev"
+#endif /* GIT_VERSION */
 #define SEND_BUF_SIZE 600
 #define BURST_LEN 50
 #define THREAD_SYNC_DELAY_US 5000
@@ -183,8 +187,12 @@ connection_failed:
 inline void
 usage(void)
 {
-	printf("Usage:\n");
-	printf("\tl2flood [-i device] [-s size] <bdaddr>\n");
+	printf("Usage:\n\tl2flood [-i bluetooth_card] "
+	                         "[-t thread_count] "
+	                         "[-v] "
+	                         "[-h] "
+	                         "<target_bluetooth_address>\n");
+	printf("\nSupport: %s\n", SUPPORT_URL);
 }
 
 int
@@ -200,7 +208,7 @@ main(int argc, char *argv[])
 	if (num_threads > 4)
 		num_threads = 4;
 
-	while ((opt = getopt(argc,argv,"i:t:")) != EOF) {
+	while ((opt = getopt(argc,argv,"i:t:vh")) != EOF) {
 		switch(opt) {
 		/* Bluetooth interface. */
 		case 'i':
@@ -213,20 +221,28 @@ main(int argc, char *argv[])
 		case 't':
 			num_threads = atoi(optarg);
 			break;
+		case 'v':
+			puts(GIT_VERSION);
+			return 0;
+		case 'h':
+			usage();
+			return 0;
 		default:
 			usage();
-			exit(1);
+			return -1;
 		}
 	}
+	argc -= optind;
+	argv += optind;
 
-	if (!(argc - optind)) {
+	if (argc == 0) {
 		usage(); /* No target given. */
-		exit(1);
+		return -1;
 	}
 
 #pragma omp parallel num_threads(num_threads)
 	{
-		flood_ping(argv[optind]);
+		flood_ping(argv[0]);
 	}
 
 	return 0;
