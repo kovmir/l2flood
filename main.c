@@ -192,7 +192,6 @@ usage(void)
 	                         "[-v] "
 	                         "[-h] "
 	                         "<target_bluetooth_address>\n");
-	printf("\nSupport: %s\n", SUPPORT_URL);
 }
 
 int
@@ -222,7 +221,8 @@ main(int argc, char *argv[])
 			num_threads = atoi(optarg);
 			break;
 		case 'v':
-			puts(GIT_VERSION);
+			printf("%s\n", GIT_VERSION);
+			printf("Support: %s\n", SUPPORT_URL);
 			return 0;
 		case 'h':
 			usage();
