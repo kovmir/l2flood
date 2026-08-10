@@ -239,7 +239,7 @@ main(int argc, char *argv[])
 		return -1;
 	}
 
-	assert(num_threads > 1);
+	assert(num_threads > 0);
 #pragma omp parallel num_threads(num_threads)
 	{
 		flood_ping(argv[0]);
