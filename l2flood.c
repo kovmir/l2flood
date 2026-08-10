@@ -3,8 +3,8 @@
 
 /* Includes */
 #include <assert.h>
-#include <errno.h>
 #include <err.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
 #include <poll.h>
@@ -20,13 +20,13 @@
 #include <bluetooth/hci_lib.h>
 #include <bluetooth/l2cap.h>
 
+/* Constants and Macros */
 #ifdef _OPENMP
 #include <omp.h>
 #else
 #error "OpenMP support missing."
 #endif /* _OPENMP */
 
-/* Constants and Macros */
 #ifndef __linux__
 #warning "Unsupported operating system."
 #endif /* __linux__ */
@@ -44,7 +44,7 @@
 } while (0)
 
 /* Function prototypes */
-static void flood_ping(char *svr);
+static void flood_ping(char *target_baddr);
 static inline void usage(void);
 
 /* Global variables */
