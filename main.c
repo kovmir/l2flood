@@ -66,7 +66,7 @@ static inline void usage(void);
 static bdaddr_t local_baddr; /* Local Bluetooth interface to attack from. */
 static int num_threads;      /* Number of parallel workers. */
 
-void
+static void
 flood_ping(const char *target_baddr)
 {
 	struct sockaddr_l2 addr;
@@ -169,7 +169,7 @@ connection_failed:
 	}
 }
 
-inline void
+static inline void
 usage(void)
 {
 	printf("Usage:\n\tl2flood [-i bluetooth_card] "
