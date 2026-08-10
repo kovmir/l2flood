@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <bluetooth/bluetooth.h>
@@ -61,12 +62,23 @@ flood_ping(char *target_baddr)
 	char str[18];
 	int fd_opts;
 
+	/* random_r(3) things. */
+	char statebuf[8] = {0};
+	struct random_data rand_state = {0};
+	unsigned int seed = (unsigned int)time(NULL);
+	int32_t randomID;
+
 	/* Socket options. */
 	struct linger linger_opt = {1, 0};
 	struct timeval snd_tv = {0, 300000}; /* 300ms */
 	int reuse = 1;
 	int sock_err;
 	socklen_t sock_err_len;
+
+	/* Initialize random number generator. */
+	if (initstate_r(seed, statebuf, sizeof(statebuf), &rand_state) == -1) {
+		err(1, "unable to seed random number generator (initstate_r)");
+	}
 
 	/* Initialize send buffer */
 	for (i = 0; i < SEND_BUF_SIZE; i++)
@@ -140,8 +152,11 @@ flood_ping(char *target_baddr)
 
 		/* Send a lot of garbage. */
 		for (i = 0; i < BURST_LEN; i++) {
+			if (random_r(&rand_state, &randomID) == -1)
+				err(1, "unable to generate random number (random_r)");
+
 			l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
-			send_cmd->ident = (uint8_t)rand();
+			send_cmd->ident = (uint8_t)randomID;
 			send_cmd->len   = htobs(SEND_BUF_SIZE);
 			send_cmd->code  = L2CAP_ECHO_REQ;
 
