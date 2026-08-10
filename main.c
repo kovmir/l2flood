@@ -135,10 +135,11 @@ flood_ping(const char *target_baddr)
 		fd_opts = fcntl(socket_fd, F_GETFL, 0);
 		if (fd_opts == -1)
 			errx(1, "Can't request socket properties.");
-		fcntl(socket_fd, F_SETFL, fd_opts & ~O_NONBLOCK);
-
+		if (fcntl(socket_fd, F_SETFL, fd_opts & ~O_NONBLOCK) == -1)
+			goto connection_failed;
 		/* Set timeout on send() calls. */
-		setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv));
+		if (setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &snd_tv, sizeof(snd_tv)) == -1)
+			goto connection_failed;
 
 		/* Write logs. */
 		memset(&addr, 0, sizeof(addr));
@@ -185,9 +186,11 @@ main(int argc, char *argv[])
 
 	/* Bind to any local Bluetooth interface by default. */
 	bacpy(&local_baddr, BDADDR_ANY);
+	num_threads = sysconf(_SC_NPROCESSORS_ONLN);
+	if (num_threads == -1)
+		err(1, "unable to get number of CPU cores");
 	/* A high number of workers is usually pointless,
 	 * as is having more workers than CPUs. */
-	num_threads = sysconf(_SC_NPROCESSORS_ONLN);
 	if (num_threads > 4)
 		num_threads = 4;
 
