@@ -1,19 +1,28 @@
 CC ?= cc
-INSTALL ?= install
 PREFIX ?= /usr/local
 
-project = l2flood
+BLUEZ_LDLIBS := $(shell pkg-config --libs bluez)
+BLUEZ_CFLAGS := $(shell pkg-config --cflags bluez)
 
-LDFLAGS = -lbluetooth
+CFLAGS += -fopenmp $(BLUEZ_CFLAGS)
+LDLIBS += $(BLUEZ_LDLIBS)
 
-build:
-	$(CC) $(CFLAGS) -fopenmp $(project).c $(LDFLAGS) -o $(project)
+BUILD_BIN := l2flood
+
+all: build
+
+build: $(BUILD_BIN)
+
+$(BUILD_BIN): main.c
+	$(CC) $(LDFLAGS) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 clean:
-	rm -f ./$(project)
+	rm -f ./$(BUILD_BIN)
 
 install:
-	mkdir -p "$(DESTDIR)$(PREFIX)/bin"
-	$(INSTALL) ./$(project) "$(DESTDIR)$(PREFIX)/bin/$(project)"
+	install -Dm755 "$(DESTDIR)$(PREFIX)/bin/$(BUILD_BIN)"
 
-.PHONY: build clean install
+uninstall:
+	rm -f "$(DESTDIR)$(PREFIX)/bin/$(BUILD_BIN)"
+
+.PHONY: build clean install uninstall
