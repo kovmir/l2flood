@@ -124,10 +124,10 @@ flood_ping(const char *target_baddr)
 		addr.l2_family = AF_BLUETOOTH;
 		str2ba(target_baddr, &addr.l2_bdaddr);
 		errno = 0;
-		if (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1)
-			goto connection_failed;
-		if (errno != EINPROGRESS)
-			goto connection_failed;
+		if (connect(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+			if (errno != EINPROGRESS)
+				goto connection_failed;
+		}
 
 		/* Await connection for 1.5 seconds... */
 		struct pollfd cpf = {socket_fd, POLLOUT, 0};
