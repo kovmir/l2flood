@@ -8,7 +8,7 @@ disconnect.
 Satisfy the [dependencies](#dependencies) first, and then:
 
 ```bash
-git clone https://git.sr.ht/~kovmir/l2flood
+git clone https://github.com/kovmir/l2flood.git
 cd l2flood
 make
 sudo make install
